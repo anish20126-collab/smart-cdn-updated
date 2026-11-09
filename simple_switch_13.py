@@ -5,7 +5,6 @@ No broadcast frames are flooded. All host IPv4 paths are computed centrally.
 """
 import csv
 import json
-import logging
 import os
 from pathlib import Path
 import time

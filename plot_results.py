@@ -3,6 +3,7 @@ import argparse
 import csv
 from collections import defaultdict,Counter
 from pathlib import Path
+from evaluation import summarize
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -33,6 +34,27 @@ def plot(root):
             writer=csv.writer(stream); writer.writerow(['scenario','successes','failures','mean_response_s','mean_throughput_mbps'])
             for name,records in groups.items():
                 writer.writerow([name,len(records),sum(r['scenario']==name and r['ok']!='True' for r in rows),sum(float(r['response_s']) for r in records)/len(records),sum(float(r['throughput_mbps']) for r in records)/len(records)])
+    summaries, comparison_distribution = summarize(rows,root)
+    if summaries:
+        fig,axes=plt.subplots(1,2,figsize=(10,4))
+        for axis,metric,label in [(axes[0],'response_s','Transfer time (s)'),
+                                  (axes[1],'throughput_mbps','Per-request throughput (Mbps)')]:
+            measured=[row for row in summaries if row['mean_'+metric] != '']
+            axis.bar([row['policy'] for row in measured],
+                     [row['mean_'+metric] for row in measured],
+                     yerr=[row['std_'+metric] for row in measured],capsize=5)
+            axis.set_ylabel(label)
+        fig.suptitle('Static vs dynamic: trial means; error bars = sample standard deviation')
+        fig.tight_layout(); fig.savefig(output/'comparison.png'); plt.close(fig)
+        fig,axis=plt.subplots()
+        servers=['srv1','srv2','srv3','srv4']
+        for index,policy in enumerate(['static','dynamic']):
+            axis.bar([x+index*.4 for x in range(4)],
+                     [comparison_distribution[policy,server] for server in servers],
+                     width=.4,label=policy)
+        axis.set_xticks([x+.2 for x in range(4)],servers)
+        axis.set_ylabel('Successful comparison requests'); axis.legend()
+        fig.tight_layout(); fig.savefig(output/'comparison_distribution.png'); plt.close(fig)
     ports=read(root/'ports.csv')
     if ports:
         series=defaultdict(list); start=min(float(r['timestamp']) for r in ports)

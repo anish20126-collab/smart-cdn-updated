@@ -1,12 +1,9 @@
-import hashlib
 import json
-import os
 from pathlib import Path
 import socket
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
 from client import fetch
 from server import ContentServer
 from protocol import read_header,send_header

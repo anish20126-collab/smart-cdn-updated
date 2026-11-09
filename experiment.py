@@ -5,7 +5,6 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 import time
 from mininet.net import Mininet
 from mininet.node import RemoteController, OVSSwitch
@@ -68,7 +67,7 @@ class Demo:
         if loss: raise RuntimeError(f'Controller connectivity failed: {loss}% loss')
         snapshot(self.output)
 
-    def batch(self,scenario,rounds=1,name='document.pdf',address=VIP):
+    def batch(self,scenario,rounds=1,name='document.pdf',address=VIP,policy='',trial=0):
         results=[]
         print(f'\nREQUESTS: {scenario} | {rounds} round(s), 6 simultaneous clients per round | {name} -> {address}',flush=True)
         for turn in range(rounds):
@@ -85,7 +84,8 @@ class Demo:
                 except (subprocess.TimeoutExpired,ValueError,IndexError) as exc:
                     process.kill(); process.communicate()
                     row=dict(ok=False,server='',client_port=0,bytes=0,response_s=0,throughput_mbps=0,error=str(exc))
-                row.update(timestamp=time.time(),scenario=scenario,client=f'c{i}',content=name)
+                row.update(timestamp=time.time(),scenario=scenario,client=f'c{i}',content=name,
+                           policy=policy,trial=trial)
                 self.rows.append(row); results.append(row)
                 show_request(self.output,row)
             self.save()
@@ -130,8 +130,7 @@ class Demo:
                 f'{self.events[-1]["recovery_s"]:.3f} s from fault to verified transfer (includes detection and download)')
         return recovered
 
-    def run(self,scenario):
-        checks={}
+    def normal_delivery(self,checks):
         stage('2. NORMAL CONTENT DELIVERY AND LOAD DISTRIBUTION',
               'All clients use one VIP. The controller chooses replicas and installs TCP-specific forwarding rules.')
         normal=self.batch('normal',3)
@@ -140,63 +139,107 @@ class Demo:
         # Exercise every sample type; video also provides sustained measurable load.
         for name in ['image.jpg','music.mp3','video.mp4']:
             checks[name]=all(r['ok'] for r in self.batch('content-'+name,name=name))
-        if scenario in ('all','congestion'):
-            stage('3. CONGESTION AND SERVER LOAD',
-                  'Starting 12 real video downloads to srv1, then concurrent VIP requests.\n'
-                  'Compare measured load, chosen routes and transfer time; successful requests alone do not prove congestion avoidance.')
-            # Saturate the existing TCLink bottlenecks without changing their capacities.
-            background=self.background('10.0.0.11',12)
-            time.sleep(2)
-            snapshot(self.output)
-            try:
-                loaded=self.batch('congestion',2,name='music.mp3')
-                checks['congestion_requests']=all(r['ok'] for r in loaded)
-            finally:
-                self.stop_processes(background)
 
-            time.sleep(2)
-        if scenario in ('all','server-failure'):
-            stage('4. SERVER FAILURE: STOP srv1 (10.0.0.11)',
-                  'Intentional fault: srv1 will stop answering. PASS requires new requests to healthy replicas, not srv1.\n'
-                  'Connections to the stopped server must reconnect; they are not migrated.')
-            self.stop_processes([self.servers[1]])
-            began=time.monotonic()
-            try:
-                self.wait_for(lambda:not self.health().get('10.0.0.11',{}).get('healthy',True),8,'Server failure was not detected')
-                # Allow the controller's next telemetry read.
-                self.wait_for(lambda:not self.controller()['health'].get('10.0.0.11',{}).get('healthy',True),5,'Controller did not observe failure')
-                verdict(True,'Health probe and controller both detected srv1 unavailable')
-                snapshot(self.output)
-                checks['server_recovered']=self.recovery_probe('server-failure',began)
-                rows=self.batch('server-failure',2)
-                checks['failed_server_avoided']=all(r['ok'] and r['server']!='srv1' for r in rows)
-            finally:
-                self.start_server(1)
-            self.wait_for(lambda:self.health().get('10.0.0.11',{}).get('healthy'),10,'srv1 did not restart')
-            verdict(True,'srv1 restored and health probe successful')
-        if scenario in ('all','link-failure'):
-            # Choose a link actually used by a prior service decision.
-            decisions=list(csv.DictReader((self.output/'decisions.csv').open()))
-            path=[int(x) for x in decisions[-1]['path'].split('-')]
-            a,b=path[0:2]
-            stage(f'5. PATH FAILURE: DISABLE s{a}--s{b}',
-                  'Intentional fault on a link from a recorded service route.\n'
-                  'Port-status detection removes stale routes; new forwarding must avoid this link.')
-            print('Prior recorded switch route: '+' -> '.join(f's{n}' for n in path),flush=True)
-            self.net.configLinkStatus(f's{a}',f's{b}','down')
-            began=time.monotonic()
-            try:
-                self.wait_for(lambda:[a,b] in self.controller()['down_links'],8,'Link failure not detected')
-                verdict(True,f'Controller detected s{a}--s{b} down; application routes invalidated')
-                snapshot(self.output)
-                checks['link_recovered']=self.recovery_probe('link-failure',began)
-                checks['link_failure_requests']=all(r['ok'] for r in self.batch('link-failure',2))
-            finally:
-                self.net.configLinkStatus(f's{a}',f's{b}','up')
-            self.wait_for(lambda:[a,b] not in self.controller()['down_links'],8,'Link restoration not detected')
-            verdict(True,f'Link s{a}--s{b} restored')
-        stage('6. RESTORED NETWORK', 'Final verified requests after restoring experimental faults.')
-        checks['restored_requests']=all(r['ok'] for r in self.batch('restored'))
+    def congestion(self,checks):
+        stage('3. CONGESTION AND SERVER LOAD',
+              'Starting 12 real video downloads to srv1, then concurrent VIP requests.\n'
+              'Compare measured load, chosen routes and transfer time; successful requests alone do not prove congestion avoidance.')
+        # Saturate the existing TCLink bottlenecks without changing their capacities.
+        background=self.background('10.0.0.11',12)
+        time.sleep(2)
+        snapshot(self.output)
+        try:
+            loaded=self.batch('congestion',2,name='music.mp3')
+            checks['congestion_requests']=all(r['ok'] for r in loaded)
+        finally:
+            self.stop_processes(background)
+
+        time.sleep(2)
+
+    def server_failure(self,checks):
+        stage('4. SERVER FAILURE: STOP srv1 (10.0.0.11)',
+              'Intentional fault: srv1 will stop answering. PASS requires new requests to healthy replicas, not srv1.\n'
+              'Connections to the stopped server must reconnect; they are not migrated.')
+        self.stop_processes([self.servers[1]])
+        began=time.monotonic()
+        try:
+            self.wait_for(lambda:not self.health().get('10.0.0.11',{}).get('healthy',True),8,'Server failure was not detected')
+            # Allow the controller's next telemetry read.
+            self.wait_for(lambda:not self.controller()['health'].get('10.0.0.11',{}).get('healthy',True),5,'Controller did not observe failure')
+            verdict(True,'Health probe and controller both detected srv1 unavailable')
+            snapshot(self.output)
+            checks['server_recovered']=self.recovery_probe('server-failure',began)
+            rows=self.batch('server-failure',2)
+            checks['failed_server_avoided']=all(r['ok'] and r['server']!='srv1' for r in rows)
+        finally:
+            self.start_server(1)
+        self.wait_for(lambda:self.health().get('10.0.0.11',{}).get('healthy'),10,'srv1 did not restart')
+        verdict(True,'srv1 restored and health probe successful')
+
+    def link_failure(self,checks):
+        # Choose a link actually used by a prior service decision.
+        decisions=list(csv.DictReader((self.output/'decisions.csv').open()))
+        path=[int(x) for x in decisions[-1]['path'].split('-')]
+        a,b=path[0:2]
+        stage(f'5. PATH FAILURE: DISABLE s{a}--s{b}',
+              'Intentional fault on a link from a recorded service route.\n'
+              'Port-status detection removes stale routes; new forwarding must avoid this link.')
+        print('Prior recorded switch route: '+' -> '.join(f's{n}' for n in path),flush=True)
+        self.net.configLinkStatus(f's{a}',f's{b}','down')
+        began=time.monotonic()
+        try:
+            self.wait_for(lambda:[a,b] in self.controller()['down_links'],8,'Link failure not detected')
+            verdict(True,f'Controller detected s{a}--s{b} down; application routes invalidated')
+            snapshot(self.output)
+            checks['link_recovered']=self.recovery_probe('link-failure',began)
+            checks['link_failure_requests']=all(r['ok'] for r in self.batch('link-failure',2))
+        finally:
+            self.net.configLinkStatus(f's{a}',f's{b}','up')
+        self.wait_for(lambda:[a,b] not in self.controller()['down_links'],8,'Link restoration not detected')
+        verdict(True,f'Link s{a}--s{b} restored')
+
+    def compare(self,checks,trials):
+        """Paired trials: fixed srv1 versus load-aware VIP, with equal workload."""
+        stage('STATIC VS DYNAMIC COMPARISON',
+              'Same six clients and document.pdf. Static uses srv1; dynamic uses the VIP.\n'
+              'Each trial runs both policies; the order alternates to reduce order bias.')
+        workload = {'static': '10.0.0.11', 'dynamic': VIP}
+        metadata = dict(trials=trials,clients=6,file='document.pdf',
+                        file_bytes=(ROOT/'content/document.pdf').stat().st_size,
+                        static_server='srv1',dynamic_address=VIP,
+                        topology='unchanged six-switch topology',
+                        background_traffic='health probes only',
+                        cooldown_seconds=4,order='alternating paired trials',
+                        static_definition='fixed server selection, controller-managed IP routing')
+        (self.output/'comparison_method.json').write_text(json.dumps(metadata,indent=2))
+        for trial in range(1,trials+1):
+            policies = ['static','dynamic'] if trial % 2 else ['dynamic','static']
+            for policy in policies:
+                # Wait for real transfers to stop, then let telemetry and reservations settle.
+                self.wait_for(lambda:len(self.health())==4 and all(
+                    state.get('healthy') and state.get('active',0)==0
+                    for state in self.health().values()),20,'Servers did not become idle')
+                time.sleep(4)
+                rows=self.batch(f'comparison-{policy}',address=workload[policy],
+                                policy=policy,trial=trial)
+                checks[f'comparison_{policy}_trial_{trial}']=all(row['ok'] for row in rows)
+
+    def run(self,scenario,trials=3):
+        checks={}
+        if scenario == 'comparison':
+            self.compare(checks,trials)
+        else:
+            self.normal_delivery(checks)
+            if scenario in ('all','congestion'):
+                self.congestion(checks)
+            if scenario in ('all','server-failure'):
+                self.server_failure(checks)
+            if scenario in ('all','link-failure'):
+                self.link_failure(checks)
+            stage('RESTORED NETWORK','Verified requests after restoring experimental faults.')
+            checks['restored_requests']=all(row['ok'] for row in self.batch('restored'))
+            if scenario == 'all':
+                self.compare(checks,trials)
         (self.output/'acceptance.json').write_text(json.dumps(checks,indent=2))
         final_summary(checks,self.output)
         return all(checks.values())
@@ -209,14 +252,16 @@ class Demo:
 
 def main():
     p=argparse.ArgumentParser(); p.add_argument('--results',required=True)
-    p.add_argument('--scenario',choices=['all','normal','congestion','server-failure','link-failure','cli'],default='all')
+    p.add_argument('--scenario',choices=['all','normal','congestion','server-failure','link-failure','comparison','cli'],default='all')
+    p.add_argument('--trials',type=int,default=3,help='Paired static/dynamic trials (default: 3)')
     args=p.parse_args()
+    if args.trials < 1: p.error('--trials must be at least 1')
     if os.geteuid()!=0: p.error('Run this Mininet process with sudo; controller stays unprivileged')
     demo=Demo(args.results)
     try:
         demo.start()
         if args.scenario=='cli': CLI(demo.net); ok=True
-        else: ok=demo.run(args.scenario)
+        else: ok=demo.run(args.scenario,args.trials)
     except Exception as exc:
         verdict(False,'Demo could not finish',str(exc))
         print(f'Inspect {demo.output}/controller.log and server logs for the cause.',flush=True)

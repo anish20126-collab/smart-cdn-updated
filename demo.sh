@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd -- "$(dirname -- "$0")"
-output="$PWD/results/$(date +%Y%m%d-%H%M%S)"
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    printf '%s\n' 'Usage: ./demo.sh [--scenario all|normal|congestion|server-failure|link-failure|comparison|cli] [--trials N]' 'Default: full demonstration plus 3 paired static/dynamic trials. Run as your normal user.'
+    exit 0
+fi
+mkdir -p "$PWD/results"
+output=$(mktemp -d "$PWD/results/$(date +%Y%m%d-%H%M%S)-XXXXXX")
 mkdir -p "$output"
 controller_pid=''
 cleanup() {

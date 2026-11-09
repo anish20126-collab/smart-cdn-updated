@@ -17,3 +17,8 @@ results/
 backups/
 simple_switch_13.p
 simple_switch_13.p[ ]
+
+# Runtime artifacts
+*.log
+*.part
+*.tmp

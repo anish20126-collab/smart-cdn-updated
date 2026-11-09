@@ -1,6 +1,6 @@
 
 from mininet.topo import Topo
-from network_config import HOSTS
+from network_config import HOSTS, LINKS
 
 class SmartCDN(Topo):
     def build(self):
@@ -38,19 +38,7 @@ class SmartCDN(Topo):
             )
 
         # Main network paths
-        links = [
-            (1, 2, 50),
-            (1, 3, 30),
-            (1, 4, 30),
-            (2, 5, 40),
-            (2, 6, 40),
-            (3, 5, 20),
-            (4, 6, 20),
-            (3, 4, 10),
-            (5, 6, 10)
-        ]
-
-        for a, b, bandwidth in links:
+        for a, b, bandwidth in LINKS:
             self.addLink(
                 s[a], s[b],
                 bw=bandwidth,

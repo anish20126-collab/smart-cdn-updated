@@ -1,199 +1,156 @@
-# Smart CDN: Content Delivery with Software-Defined Networking
+# Smart CDN — SDN and TCP Mini Project
 
-Six clients. Four content servers. One service address.
+Six clients download files from four servers through **one service address: `10.0.0.100:5000`**. An SDN controller chooses the server and tells the switches where to forward each connection.
 
-This project demonstrates how an SDN controller can choose a content server, route requests through a network, and keep new downloads working when a server or link fails. Clients connect to `10.0.0.100:5000`; the controller chooses a healthy replica using measured server load and network utilization.
+This is a Mininet network emulation: it uses real TCP sockets, Linux network namespaces, Open vSwitch and OpenFlow 1.3. It is not a Python-only model.
 
-The lab uses **Mininet, Open vSwitch, OpenFlow 1.3, OS-Ken, and Python TCP sockets**. It includes an automated demo, checksum-verified downloads, failure experiments, graphs, and a presentation guide.
+## What stays simple
 
-## Start here
+- One command runs the full demonstration: `./demo.sh`.
+- One topology: six switches, six clients, four servers, nineteen links.
+- One protocol: a JSON header followed by file bytes.
+- One selection rule: choose the healthy reachable server with the lowest score.
+- Three fault/load demonstrations: congestion, server failure and link failure.
+- One comparison: fixed-server selection versus dynamic selection.
 
-- **Run the project:** follow [Setup and execution](#setup-and-execution).
-- **Present the final demo:** use [DEMO.md](DEMO.md) and [VIVA.md](VIVA.md).
-- **Review recorded evidence:** open the [sample results](docs/sample-results/README.md).
-- **Understand the implementation:** read the architecture and controller sections below.
+## Install on a dedicated Kali/Debian VM
 
-## What the demo shows
-
-| Experiment | What happens | What to inspect |
-| --- | --- | --- |
-| Normal delivery | Six clients download through one virtual address | Verified transfers and server choices |
-| Congestion | Background downloads create real traffic | Measured utilization and new selections |
-| Server failure | `srv1` stops, then returns | New requests avoid the failed replica |
-| Link failure | A used network link goes down, then returns | New requests follow available paths |
-| Restoration | Requests run after the faults are removed | Successful downloads and acceptance checks |
-
-The saved run contains **78 successful requests, zero request failures, and 11 passing acceptance checks**. This is evidence from one recorded VM run, not a performance guarantee. See [validation details](VALIDATION.md) for what was rerun during repository preparation.
-
-## Architecture
-
-```mermaid
-flowchart TD
-    C["OS-Ken controller: virtual service 10.0.0.100"]
-    C -. OpenFlow 1.3 .-> s1
-    C -. OpenFlow 1.3 .-> s2
-    C -. OpenFlow 1.3 .-> s3
-    C -. OpenFlow 1.3 .-> s4
-    C -. OpenFlow 1.3 .-> s5
-    C -. OpenFlow 1.3 .-> s6
-    s1 ---|50 Mbps| s2
-    s1 ---|30 Mbps| s3
-    s1 ---|30 Mbps| s4
-    s2 ---|40 Mbps| s5
-    s2 ---|40 Mbps| s6
-    s3 ---|20 Mbps| s5
-    s4 ---|20 Mbps| s6
-    s3 ---|10 Mbps| s4
-    s5 ---|10 Mbps| s6
-    s3 --- S12[srv1 .11 / srv2 .12]
-    s4 --- S34[srv3 .13 / srv4 .14]
-    s5 --- C123[c1 .21 / c2 .22 / c3 .23]
-    s6 --- C456[c4 .24 / c5 .25 / c6 .26]
-```
-
-All addresses use `10.0.0.0/24`. Host links are 100 Mbps/2 ms; inter-switch links have 5 ms delay. The original six switches, ten hosts and nineteen links are retained. TCLink applies bandwidth and delay. Static adjacency and MAC addresses are shared in `network_config.py`; tests verify these against Mininet ports.
-
-## Setup and execution
-
-Use a dedicated Kali/Debian Linux VM with sudo access. Install system dependencies and create the controller environment after cloning the repository:
+After cloning your repository, open its `smart-cdn` directory:
 
 ```bash
 sudo apt update
-sudo apt install -y git python3 python3-venv python3-pip mininet openvswitch-switch python3-matplotlib
-git clone <YOUR_GITHUB_REPOSITORY_URL> smart-cdn
-cd smart-cdn
+sudo apt install -y python3 python3-venv python3-pip mininet openvswitch-switch python3-matplotlib
 python3 -m venv sdn-env
 ./sdn-env/bin/python -m pip install -r requirements-controller.txt
+sudo systemctl start openvswitch-switch
 ```
 
-The controller dependency is pinned to the locally installed OS-Ken 4.2.2. Mininet and plotting run with system Python; the controller runs in `sdn-env`. The existing development VM uses Python 3.14.7. If reusing that VM, keep its working environment and skip installation.
+Keep the existing working `sdn-env` if it is already installed. The controller uses its OS-Ken 4.2.2 environment; Mininet and plotting use system Python. The existing VM has Python 3.14.7; fresh installation on other versions has not been verified here.
+
+## Run
 
 ```bash
-cd /path/to/smart-cdn
-python3 -c 'import mininet, matplotlib'
-./sdn-env/bin/python -c 'import os_ken'
-sudo systemctl start openvswitch-switch
 ./demo.sh
 ```
 
-Run `demo.sh` as your normal user. It asks sudo permission for Mininet; the controller stays unprivileged. Do not run multiple demos concurrently. The script generates sample files, starts OS-Ken, starts Mininet and four servers, performs experiments, plots available measurements, and terminates its processes. The default is `--scenario all`.
+Run as your normal user; the script requests sudo only for Mininet. It starts the controller, creates the network, starts servers, verifies switch connections and ping connectivity, downloads files, exercises faults, runs comparison trials and plots results. Shutdown stops child processes and Mininet. Do not run multiple demos together.
+
+For a shorter focused demonstration:
 
 ```bash
-./demo.sh --scenario normal
-./demo.sh --scenario congestion
 ./demo.sh --scenario server-failure
-./demo.sh --scenario link-failure
-./demo.sh --scenario cli
+./demo.sh --scenario comparison --trials 3
 ```
 
-Each scenario first performs baseline connectivity and content tests. `cli` leaves the topology and servers running until you enter `exit`. Ctrl-C requests shutdown. After an abnormal crash on a dedicated Mininet VM, `sudo mn -c` removes stale Mininet resources (including other Mininet experiments).
+The full demo includes both. Other scenarios: `normal`, `congestion`, `link-failure`, `cli`. See [DEMO.md](DEMO.md) for the exact evaluation workflow.
 
-To start the controller alone:
+## Topology
 
-```bash
-./sdn-env/bin/python -B sdn_launcher.py --results results/manual
-# In another terminal, for the same output directory:
-sudo python3 -B experiment.py --results results/manual --scenario cli
+| Switch | Connected switches (Mbps) | Attached hosts |
+| --- | --- | --- |
+| s1 | s2 (50), s3 (30), s4 (30) | — |
+| s2 | s1 (50), s5 (40), s6 (40) | — |
+| s3 | s1 (30), s5 (20), s4 (10) | srv1, srv2 |
+| s4 | s1 (30), s6 (20), s3 (10) | srv3, srv4 |
+| s5 | s2 (40), s3 (20), s6 (10) | c1, c2, c3 |
+| s6 | s2 (40), s4 (20), s5 (10) | c4, c5, c6 |
+
+Server addresses are `10.0.0.11–14`; client addresses are `10.0.0.21–26`, all `/24`. Host links are 100 Mbps/2 ms. Switch links have 5 ms delay. The controller listens locally on port 6653. `network_config.py` holds shared links, addresses, MACs and switch ports.
+
+## How a request works
+
+1. A client opens a TCP connection to `10.0.0.100:5000`.
+2. The controller answers ARP (address lookup) for the virtual IP.
+3. The first TCP SYN reaches the controller, which chooses a healthy reachable server.
+4. The controller installs connection-specific OpenFlow rules along computed paths.
+5. At the client switch, the virtual destination is rewritten to the chosen server address. Reverse rules rewrite the response source to the virtual IP.
+6. The server receives the request and streams file bytes. The client checks the length and SHA-256 checksum before keeping the file.
+
+This is switch-based steering, not a Python proxy relaying downloads. Routes do not flood packets, so the redundant physical links do not create forwarding loops.
+
+## TCP protocol
+
+Each connection carries one request. Headers are UTF-8 JSON ending in a newline.
+
+```text
+Request:  {"op":"get","name":"document.pdf"}\n
+Response: {"ok":true,"server":"srv1","size":2097152,"sha256":"..."}\n
+          followed by exactly size bytes
+Error:    {"ok":false,"error":"Content not found"}\n
+Health:   {"op":"health"}\n  -> JSON status with active transfers and byte counters
 ```
 
-The experiment runner requires generated `content/`; run `python3 generate_content.py` first when using these separate commands.
+The buffered reader handles fragmented TCP delivery. Headers are limited to 16 KiB. Servers handle clients concurrently using threads. The client handles timeouts, missing files, short transfers and checksum errors; partial files are removed. Filenames must exist in the server catalog, preventing directory traversal.
 
-## TCP communication
+Sample `.pdf`, `.jpg`, `.mp3` and `.mp4` files are deterministic **synthetic binary data**, not valid media formats. All replicas serve identical content.
 
-Servers listen on TCP port 5000. A newline-delimited JSON request names the desired file. The response header contains size, server identity and SHA-256, followed by exactly that many binary bytes. Buffered header parsing tolerates TCP fragmentation. Clients detect truncated transfers and checksum mismatches, use timeouts, write a temporary file, and commit only verified downloads. Missing files and traversal requests are rejected.
+## Simple dynamic selection rule
 
-`generate_content.py` produces deterministic synthetic binary fixtures named `video.mp4`, `image.jpg`, `document.pdf` and `music.mp3`. They test binary delivery and are **not playable media or valid document encodings**. Every server serves the same immutable files.
+For every new connection, ignore unhealthy or unreachable servers and choose the lowest score:
 
-## Controller and selection algorithm
-
-Clients request `10.0.0.100:5000`. The controller answers ARP for the VIP and all known hosts. It never floods broadcasts. Generic IPv4 connectivity uses computed paths; unsupported L2 protocols and unknown destinations are dropped.
-
-For a new TCP SYN, healthy reachable servers are ranked by:
-
-```
-link utilization = max(measured forward Mbps, measured reverse Mbps) / link capacity
+```text
+utilization = max(forward Mbps, reverse Mbps) / capacity
 link cost = 5 + 100 / max(0.1, capacity * (1 - min(0.99, utilization)))
-server score = shortest-path cost + 20 * (active transfers + recent reservations)
-               + 2 * measured server Mbps
+score = shortest path cost + 20 * (active transfers + recent reservations)
+        + 2 * server Mbps
 ```
 
-Dijkstra computes paths. Recent two-second reservations help distribute simultaneous arrivals before the next load sample. Active transfers and server throughput come from server counters, not invented values. Weights are explanatory lab heuristics, not a production optimizer.
+Dijkstra's algorithm finds the lowest-cost path. A two-second reservation counts recently assigned connections until monitoring catches up. This prevents simultaneous arrivals from all seeing an idle replica. These are simple lab weights, not an optimal scheduling claim.
 
-The controller installs connection-specific rules matching client IP, TCP source port and service port. At client ingress it translates VIP to the chosen physical server IP and destination MAC. On the reverse path, the client edge translates the server source back to the VIP and virtual MAC. OVS updates packet checksums. Established connections stay assigned to their server; changed network conditions affect new selections. Route entries expire after 30 seconds idle; session records expire after five minutes without a controller-observed packet.
+The controller reads switch byte counters approximately every second. A probe in c1 checks each server over the network and writes measured health/load to a shared file; data older than four seconds is rejected. Losing c1 or its probe stops new service selections until monitoring is restored.
 
-## Monitoring and availability
+## Fault behavior
 
-OpenFlow port counters are sampled approximately once per second, converted to actual Mbps using elapsed time, and saved with utilization. Flow byte/packet counters are also collected. A process in c1 probes every server over the actual SDN network, retrieves active transfers and cumulative transmitted bytes, and atomically publishes health telemetry through the lab's shared filesystem. The controller treats telemetry older than four seconds as unavailable.
+- **Congestion:** twelve background video downloads target srv1; VIP requests run alongside them. Inspect measured counters and choices. Success alone does not prove congestion avoidance.
+- **Server failure:** stop srv1, wait for health detection, verify new requests avoid it, then restart it. Existing connections to a dead server must reconnect.
+- **Link failure:** disable a link from a recorded route. Port-state detection clears routes; subsequent packets cause path recalculation. Restore the link afterward. Transient loss and TCP retransmission are possible.
 
-This intentionally simple lab telemetry channel avoids an additional management network. Loss of c1 or its telemetry process makes all service replicas unavailable to new selections; restart the demo to restore it. Server health probes themselves contribute a small amount of traffic.
+## Static versus dynamic methodology
 
-## Failures and congestion
+The baseline fixes **server selection** to srv1 (`10.0.0.11`); dynamic requests use the VIP. Both still use the same controller-managed network. The baseline does not choose servers using load; ordinary controller-managed IP routing is retained. This compares server-selection policies, not SDN versus a non-SDN network.
 
-The server-failure experiment stops srv1, waits for both the health probe and controller to observe the failure, tests new requests against remaining servers, and restarts srv1. The link-failure experiment disables an inter-switch link used by a prior selected path, waits for OpenFlow port-state detection, tests alternate-path delivery, and restores the link.
+Each of three paired trials runs six concurrent clients downloading the same 2 MiB `document.pdf` under each policy. Order alternates: static/dynamic, dynamic/static, static/dynamic. Each batch waits for four healthy idle servers and a four-second cooldown. No experimental background load is running during comparison; normal health probes remain active. The topology, bandwidth, file, clients and server processes are identical. Workload requests start as one batch of six processes, not precisely synchronized packet emission.
 
-Port changes invalidate application routes so subsequent packets cause path recomputation. The redundant topology remains intact. Existing connections to a failed server must reconnect; there is no state migration. Link changes can cause transient packet loss and TCP retransmission; new connections are the automated recovery acceptance target.
+`comparison_method.json` records conditions. `requests.csv` records policy and trial. `comparison_trials.csv` reports each trial's successes, failures and successful-request averages. `comparison_summary.csv` averages those trial means and reports their sample standard deviation. Failed requests remain in the failure counts; an all-failed policy has blank averages, not fabricated zero performance. Throughput is bytes divided by completion time per request, not aggregate link throughput. Distribution counts successful requests, excluding health probes.
 
-Congestion uses twelve simultaneous real video downloads to srv1 while six clients request the VIP, using the original limited-bandwidth links. This creates real server/network load. Decisions use measured load and bidirectional utilization. Saturation intensity depends on the VM; inspect `ports.csv` rather than assuming every run saturates a particular link. This basic experiment does not promise equal distribution or automatic migration of established sessions.
+Graphs: `comparison.png` shows transfer time and throughput with trial standard deviations; `comparison_distribution.png` shows requests per server. Existing scenario, link and recovery graphs are also retained. Dynamic selection may be slower on some runs. Small samples, shared VM CPU, cached file data, persistent flow rules, policy order and residual monitoring noise limit conclusions. The comparison has no fault injection; failure recovery is evaluated separately for dynamic VIP traffic.
 
-## Measurements and testing
-
-Results go to `results/<timestamp>/`:
-
-- `requests.csv`: completion time, per-request throughput, success, error, client and selected server.
-- `decisions.csv`: server score, path and measured load at selection.
-- `ports.csv`: actual transmit/receive Mbps and utilization.
-- `flows.csv`: OpenFlow packet/byte counts and matches.
-- `recovery.csv`: observed time from failure command to successful new transfer, including detection and transfer time.
-- `connectivity.json`: controller-managed pingAll loss.
-- `acceptance.json`: automated checks; false values make the demo exit nonzero.
-- `summary.csv`, `graphs/`: averages and performance, per-client, distribution, link throughput and recovery plots.
-- `controller.log`, `srv*.log`, `health.log`: implementation logs.
-
-Replot existing measurements with `python3 plot_results.py results/<timestamp>`. An existing recorded demo run is included in `docs/sample-results/`; see its README for provenance and scope. Failure timing is an end-to-end observed recovery measure, not isolated controller processing latency. Average throughput is mean per-request throughput, not aggregate link capacity.
+## Results and tests
 
 ```bash
 ./sdn-env/bin/python -B -m unittest discover -s tests -v
+python3 -B -m unittest discover -s tests -p test_topology.py -v
+python3 plot_results.py results/<run>
 ```
 
-Tests include selection policy, alternate paths, actual OS-Ken message serialization, bidirectional VIP rules, proxy ARP, binary transfer, six concurrent local clients, missing content and integrity failure. Socket tests skip only when the environment denies socket creation. Run the full demo to verify the actual controller/OVS/Mininet integration.
+Runs write `results/<timestamp>-<suffix>/`: requests, decisions, link/flow counters, recovery times, acceptance checks, comparison tables and graphs. False acceptance checks cause a nonzero demo exit status.
 
-Implementation-environment status is recorded in `VALIDATION.md`. A saved live run is included; rerun integration on your VM with working sudo to validate your installation.
+[Representative saved results](docs/sample-results/README.md) contain 78 successful requests, zero failures and eleven true acceptance checks from an earlier live run. **They do not contain the new comparison.** During this revision, seven unit tests passed; four socket tests skipped because the coding sandbox denies sockets, and the topology test skipped in the isolated controller environment. The topology test passed separately under system Python. New live integration and comparison have not run here: sudo is also blocked. Run the full demo in the VM terminal before claiming the updated end-to-end acceptance.
 
-## Limitations and future improvements
+## Source guide
 
-This is a basic static IPv4 lab, not a production CDN. It does not implement discovery, IPv6, TLS, authentication, arbitrary host mobility, persistent connection migration, distributed telemetry, or automatic server process supervision. Replica restart is part of the experiment. Flow changes across switches are asynchronous, so TCP retransmissions can occur during rule setup. Session expiry is appropriate for these short lab transfers, not long-lived production sockets. Future work includes LLDP discovery, barrier-coordinated updates, durable connection tracking, HTTP delivery and repeated statistically controlled experiments.
-
-## Repository guide
-
-| File | Purpose |
+| File | Responsibility |
 | --- | --- |
-| `demo.sh` | Start controller, run scenarios, and plot results |
-| `topology.py`, `network_config.py` | Mininet topology and shared addressing/ports |
-| `simple_switch_13.py`, `routing.py` | OpenFlow controller and path selection |
-| `sdn_launcher.py`, `run_controller.py` | Controller entry points |
-| `server.py`, `client.py`, `protocol.py` | Binary content protocol and integrity checks |
-| `telemetry_agent.py` | Network health probes and load telemetry |
-| `experiment.py`, `presentation.py` | Automated scenarios and readable demo output |
-| `generate_content.py`, `plot_results.py` | Synthetic fixtures and measured plots |
-| `tests/` | Controller, routing, protocol, and transfer checks |
-| [DEMO.md](DEMO.md) | Live walkthrough and troubleshooting |
-| [VIVA.md](VIVA.md) | Presentation script and likely questions |
-| [VALIDATION.md](VALIDATION.md) | Verification evidence and environment limitations |
-| [Sample results](docs/sample-results/README.md) | Saved acceptance checks, measurements, and graphs |
+| `demo.sh` | One-command startup, results folder and controller cleanup |
+| `experiment.py` | Named stages: connectivity, transfers, congestion, failures and comparison |
+| `topology.py`, `network_config.py` | Network construction and shared constants |
+| `sdn_launcher.py`, `simple_switch_13.py` | Start OS-Ken; handle ARP, rules, sessions and monitoring |
+| `routing.py` | Shortest path and server score |
+| `client.py`, `server.py`, `protocol.py` | TCP transfers, threaded serving and framing |
+| `telemetry_agent.py` | Health and measured server traffic |
+| `generate_content.py` | Repeatable sample content |
+| `evaluation.py`, `plot_results.py` | Comparison statistics and graphs |
+| `tests/` | Controller serialization, policy, transfer and statistics tests |
+| `archive/` | Unused compatibility wrapper retained for reference |
 
-Generated content, local environments, working backups, and full experiment downloads are excluded from Git. `demo.sh` recreates the required fixtures.
+Read [VIVA_EXPLANATION.md](VIVA_EXPLANATION.md) for function explanations and questions. The rubric audit is in [DEMO.md](DEMO.md).
 
-## Troubleshooting
+## Troubleshooting and limits
 
-| Symptom | Check |
-| --- | --- |
-| `No module named os_ken` | Install `requirements-controller.txt` using `./sdn-env/bin/python -m pip`. |
-| `No module named mininet` or `matplotlib` | Install the system packages from the setup instructions; the experiment uses system Python. |
-| Switches do not connect | Start `openvswitch-switch`, check `controller.log`, and confirm port 6653 is free with `ss -ltnp`. |
-| Interfaces remain after a crashed run | On the dedicated lab VM, run `sudo mn -c` before restarting. |
-| Four transfer tests are skipped | Run the suite in a VM terminal that permits local sockets; see `VALIDATION.md`. |
-| A demo acceptance check is false | Inspect that run's `acceptance.json`, request errors, controller log, and health log. |
+- Missing module: install system Mininet/Matplotlib, or controller requirements in `sdn-env`, as appropriate.
+- Switches do not connect: start OVS, check `controller.log`, and check port 6653 with `ss -ltnp`.
+- Stale interfaces after a crash: run `sudo mn -c` only on the dedicated lab VM; it affects other Mininet experiments too.
+- Failed acceptance: inspect `acceptance.json`, `requests.csv` and controller/server/health logs.
+- Static IPv4 lab only: no discovery, TLS, IPv6, host mobility or migration of established server connections. Short idle/session timeouts suit brief lab transfers.
 
-## License
-
-A license has not yet been selected by the author.
+Virtual environments, generated downloads, logs and credentials are ignored by Git. Keep representative measured CSV/graphs in `docs/sample-results/` when adding a verified new run. No license has been selected by the author.
