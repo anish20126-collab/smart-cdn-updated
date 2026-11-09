@@ -28,7 +28,7 @@ def summarize(rows, root):
         for metric in ('response_s', 'throughput_mbps'):
             values = [row['mean_'+metric] for row in selected if row['successes']]
             summary['mean_'+metric] = mean(values) if values else ''
-            summary['std_'+metric] = stdev(values) if len(values)>1 else (0 if values else '')
+            summary['std_'+metric] = stdev(values) if len(values)>1 else ''
         summaries.append(summary)
     distribution = Counter((row['policy'], row['server']) for row in rows
                            if row.get('policy') in ('static','dynamic') and str(row['ok'])=='True')

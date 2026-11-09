@@ -51,9 +51,9 @@ During server failure, health checks mark srv1 unavailable, new connections sele
 
 Transfer time includes connection, request, data transfer and verification. Per-request throughput is received bytes times eight divided by elapsed seconds and one million. Success means complete, checksum-verified transfer. Distribution counts successful file requests per server. Recovery time runs from issuing a fault to a successful new verified transfer; it includes detection and transfer time.
 
-The static baseline always requests srv1 directly; it still uses controller-managed routing. The dynamic policy requests the virtual service. Each uses the same six clients, 2 MiB file and unchanged network, with three paired trials and alternating order. No fault or background load is injected in the comparison. Failures are reported separately from successful timing averages. Standard deviation describes variability between trial means.
+The static baseline always requests srv1 directly; it still uses controller-managed routing. The dynamic policy requests the virtual service. Each uses the same six clients and unchanged network, with one static batch followed by one dynamic batch. Normal delivery mixes PDF, image, music and video using identical client/file assignments in both modes. Other cases use the same 2 MiB PDF for all clients. Both policies are now compared within normal mixed-file delivery, congestion, faults and restoration. Each condition is reported separately; the comparison-only command uses normal traffic. Congestion restarts equal background load before each mode, and fault tests keep the same fault present for both. Failures are reported separately from successful timing averages. One round has no between-round variability estimate; request extra trials to estimate it.
 
-Timing graphs compare observed completion times. Throughput graphs compare successful per-request rates. Distribution graphs show whether requests spread across servers. They do not prove optimal routing, universal superiority, aggregate network capacity or uninterrupted established connections. VM scheduling, caches and a small sample affect results. The old saved run is real evidence, but it has no static comparison; the new comparison must be run before reporting a conclusion.
+Timing graphs compare observed completion times. Throughput graphs compare successful per-request rates. Distribution graphs show whether requests spread across servers. They do not prove optimal routing, universal superiority, aggregate network capacity or uninterrupted established connections. VM scheduling, caches and a small sample affect results. The old saved run is real evidence, but it has no static comparison; the revised paired comparisons must be run before reporting conclusions. Static can be faster; the demo labels possible reasons as unproven. Both policies retain SDN routing and can reroute after link failure. Static stays tied to srv1 and cannot replace it when it stops.
 
 ## Important files and functions
 
@@ -81,9 +81,9 @@ Timing graphs compare observed completion times. Throughput graphs compare succe
 | `generate_content.generate` | Create repeatable synthetic files and a checksum manifest |
 | `Demo.start`, `spawn`, `start_server`, `wait_for`, `controller`, `health` | Start processes and wait for actual readiness/connectivity |
 | `Demo.batch`, `background`, `recovery_probe` | Run concurrent requests, add real load, test recovery |
-| `normal_delivery`, `congestion`, `server_failure`, `link_failure`, `compare`, `run` | Clearly named demonstration stages |
+| `paired_test`, `normal_delivery`, `congestion`, `server_failure`, `link_failure`, `compare`, `run` | Clearly named demonstration stages |
 | `Demo.save`, `stop_processes`, `close` | Write measurements and clean up network/processes |
-| `presentation.py` | Print stages, measured routes, health and acceptance results |
+| `presentation.py` | Print simple stages, actual server choices/changes, health and check summaries |
 | `evaluation.summarize` | Group actual comparison records into trial statistics and distribution |
 | `plot_results.read`, `plot` | Read actual CSV and create summaries/graphs |
 | `tests/` | Check routing, real OpenFlow serialization, transfers and statistics |
@@ -115,5 +115,5 @@ The optional server `--rate` setting paces each transfer in bytes/sec; the norma
 21. **What if a server fails?** Probes mark it unhealthy; new VIP connections use other servers. Existing failed connections must reconnect.
 22. **What if a link fails?** Port-state detection clears old rules and new paths avoid that link.
 23. **What is the baseline?** Fixed srv1 selection over the same controller-managed topology.
-24. **What do error bars mean?** Sample standard deviation of the measured per-trial means, not a guarantee or confidence interval.
+24. **Why are there no variability bars by default?** One round per mode is too little to estimate between-round variation. With repeated trials, bars show sample standard deviation of trial means.
 25. **Must dynamic always perform better?** No. Report actual measurements, failures, variation and limitations honestly.

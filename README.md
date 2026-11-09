@@ -35,11 +35,13 @@ Keep the existing working `sdn-env` if it is already installed. The controller u
 
 Run as your normal user; the script requests sudo only for Mininet. It starts the controller, creates the network, starts servers, verifies switch connections and ping connectivity, downloads files, exercises faults, runs comparison trials and plots results. Shutdown stops child processes and Mininet. Do not run multiple demos together.
 
+For a paced presentation, use `./demo.sh --present` and press Enter between sections.
+
 For a shorter focused demonstration:
 
 ```bash
 ./demo.sh --scenario server-failure
-./demo.sh --scenario comparison --trials 3
+./demo.sh --scenario comparison --trials 1
 ```
 
 The full demo includes both. Other scenarios: `normal`, `congestion`, `link-failure`, `cli`. See [DEMO.md](DEMO.md) for the exact evaluation workflow.
@@ -109,23 +111,30 @@ The controller reads switch byte counters approximately every second. A probe in
 
 The baseline fixes **server selection** to srv1 (`10.0.0.11`); dynamic requests use the VIP. Both still use the same controller-managed network. The baseline does not choose servers using load; ordinary controller-managed IP routing is retained. This compares server-selection policies, not SDN versus a non-SDN network.
 
-Each of three paired trials runs six concurrent clients downloading the same 2 MiB `document.pdf` under each policy. Order alternates: static/dynamic, dynamic/static, static/dynamic. Each batch waits for four healthy idle servers and a four-second cooldown. No experimental background load is running during comparison; normal health probes remain active. The topology, bandwidth, file, clients and server processes are identical. Workload requests start as one batch of six processes, not precisely synchronized packet emission.
+Both modes run in **each condition**: mixed-file normal downloads, congestion, server failure, link failure, and restored network. There are no separate file-type tests. Each condition uses one static batch and one dynamic batch with the same six client/file assignments. Normal delivery mixes all four file types in one batch; other cases use document.pdf for all clients. The comparison-only command runs just normal document downloads. Full mode no longer repeats a separate final normal comparison.
 
-`comparison_method.json` records conditions. `requests.csv` records policy and trial. `comparison_trials.csv` reports each trial's successes, failures and successful-request averages. `comparison_summary.csv` averages those trial means and reports their sample standard deviation. Failed requests remain in the failure counts; an all-failed policy has blank averages, not fabricated zero performance. Throughput is bytes divided by completion time per request, not aggregate link throughput. Distribution counts successful requests, excluding health probes.
+Before each batch, wait for healthy servers to be idle and allow four seconds for measurements to settle. For server failure, only the three remaining servers must be healthy; srv1 stays stopped throughout both modes. Static failures during this test are expected evidence, not hidden or counted as a failed recovery acceptance test. Dynamic success and avoidance of srv1 are checked separately. The link remains disabled throughout its paired test. Both policies retain SDN routing, so a fixed server can still be reached via a new route.
 
-Graphs: `comparison.png` shows transfer time and throughput with trial standard deviations; `comparison_distribution.png` shows requests per server. Existing scenario, link and recovery graphs are also retained. Dynamic selection may be slower on some runs. Small samples, shared VM CPU, cached file data, persistent flow rules, policy order and residual monitoring noise limit conclusions. The comparison has no fault injection; failure recovery is evaluated separately for dynamic VIP traffic.
+For congestion, start twelve fresh competing video transfers to srv1 before **each policy batch**, wait two seconds, then run the foreground PDF downloads. Stop those background processes in a `finally` block after the batch. The offered load is matched, but exact overlap and utilization can differ because network transfers progress at different speeds. There are no presenter pauses between background startup and foreground requests.
+
+Every condition writes `comparison_cases/<condition>/requests.csv`, `method.json`, `comparison_trials.csv`, `comparison_summary.csv`, and `comparison_distribution.csv` inside the run folder. The metadata records the file size, trials, workload and unavailable links. Per-condition graphs are generated there too. Top-level comparison tables and graphs use only the normal condition, so fault results and different file sizes are never pooled into that comparison.
+
+Terminal results separately show which mode delivered more files and which had faster successful downloads. Timing and throughput averages exclude failures; an all-failed mode has no invented average. With one round, between-round standard deviation is unavailable (blank in CSV); graphs explicitly say variability was not measured. Use `--trials 2` or more for repeated measurement. Per-request throughput is bytes divided by completion time, not aggregate network throughput. The explanation reports actual successful server distribution and labels possible causes of a timing difference as unproven. Static can be faster when srv1 is already suitable; dynamic does extra selection/rule work and may use other paths. These are possible explanations, not isolated measurements of overhead.
+
+Graphs: `comparison.png` shows time and throughput (standard deviations only for repeated trials); `comparison_distribution.png` shows files served per replica. Existing scenario/link/recovery plots remain. Recovery timing is measured separately for dynamic traffic after fault detection, not as a matched static recovery-time benchmark. VM scheduling, caches, flow reuse, residual monitoring noise and only one round limit conclusions.
 
 ## Results and tests
 
 ```bash
 ./sdn-env/bin/python -B -m unittest discover -s tests -v
 python3 -B -m unittest discover -s tests -p test_topology.py -v
+python3 -B -m unittest discover -s tests -p test_pairing.py -v
 python3 plot_results.py results/<run>
 ```
 
 Runs write `results/<timestamp>-<suffix>/`: requests, decisions, link/flow counters, recovery times, acceptance checks, comparison tables and graphs. False acceptance checks cause a nonzero demo exit status.
 
-[Representative saved results](docs/sample-results/README.md) contain 78 successful requests, zero failures and eleven true acceptance checks from an earlier live run. **They do not contain the new comparison.** During this revision, seven unit tests passed; four socket tests skipped because the coding sandbox denies sockets, and the topology test skipped in the isolated controller environment. The topology test passed separately under system Python. New live integration and comparison have not run here: sudo is also blocked. Run the full demo in the VM terminal before claiming the updated end-to-end acceptance.
+[Representative saved results](docs/sample-results/README.md) contain 78 successful requests, zero failures and eleven true acceptance checks from an earlier live run. **They do not contain the new comparison.** During this revision, ten unit tests passed in the controller environment; four socket tests skipped because the coding sandbox denies sockets, and three system-Python checks skipped there. The topology and mocked pairing checks both passed separately under system Python. New live integration and comparison have not run here: sudo is also blocked. Run the full demo in the VM terminal before claiming the updated end-to-end acceptance.
 
 ## Source guide
 
@@ -154,3 +163,9 @@ Read [VIVA_EXPLANATION.md](VIVA_EXPLANATION.md) for function explanations and qu
 - Static IPv4 lab only: no discovery, TLS, IPv6, host mobility or migration of established server connections. Short idle/session timeouts suit brief lab transfers.
 
 Virtual environments, generated downloads, logs and credentials are ignored by Git. Keep representative measured CSV/graphs in `docs/sample-results/` when adding a verified new run. No license has been selected by the author.
+
+## Short presentation (target: under five minutes)
+
+Run `./demo.sh --present`. Defaults are one static batch and one dynamic batch per case, with no separate file-type loops. Normal clients request: c1 PDF, c2 image, c3 music, c4 video, c5 PDF, c6 image. Both modes use this identical assignment. Other cases use the same 2 MiB PDF for all clients. File sizes/topology are unchanged; competing video transfers still generate actual load. Total: 60 foreground requests across five cases, plus connectivity, health and two recovery probes (which can retry). Manual pauses and a slow VM can exceed the target; the shell prints actual elapsed time. This shorter version has not been timed live in the coding sandbox.
+
+Batch collection has one shared 30-second deadline, rather than waiting up to 40 seconds separately for every client. Socket operations keep a 10-second inactivity timeout. A timeout is still a real failed test, not silently accepted. Server/link restoration and cleanup remain in place. One round is for presentation, not a strong performance benchmark. Earlier saved measurements describe the earlier workload.

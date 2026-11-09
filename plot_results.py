@@ -34,17 +34,30 @@ def plot(root):
             writer=csv.writer(stream); writer.writerow(['scenario','successes','failures','mean_response_s','mean_throughput_mbps'])
             for name,records in groups.items():
                 writer.writerow([name,len(records),sum(r['scenario']==name and r['ok']!='True' for r in rows),sum(float(r['response_s']) for r in records)/len(records),sum(float(r['throughput_mbps']) for r in records)/len(records)])
-    summaries, comparison_distribution = summarize(rows,root)
+    comparison_rows=[row for row in rows if root.parent.name == 'comparison_cases' or row.get('case') in ('normal','comparison')
+                     or (not row.get('case') and row['scenario'].startswith('comparison-'))]
+    summaries, comparison_distribution = summarize(comparison_rows,root)
     if summaries:
+        print('\nCOMPARISON RESULTS (from actual downloads)',flush=True)
+        for result in summaries:
+            if result['mean_response_s'] == '':
+                print(f"{result['policy'].upper()}: no successful downloads; failures={result['failures']}",flush=True)
+            else:
+                print(f"{result['policy'].upper()}: average {result['mean_response_s']:.2f} seconds per file | "
+                      f"{result['mean_throughput_mbps']:.2f} Mbps | "
+                      f"{result['successes']} successful, {result['failures']} failed",flush=True)
+        print('Lower time is faster. These results do not guarantee which mode wins next time.',flush=True)
         fig,axes=plt.subplots(1,2,figsize=(10,4))
         for axis,metric,label in [(axes[0],'response_s','Transfer time (s)'),
                                   (axes[1],'throughput_mbps','Per-request throughput (Mbps)')]:
             measured=[row for row in summaries if row['mean_'+metric] != '']
             axis.bar([row['policy'] for row in measured],
                      [row['mean_'+metric] for row in measured],
-                     yerr=[row['std_'+metric] for row in measured],capsize=5)
+                     yerr=[row['std_'+metric] or 0 for row in measured],capsize=5)
             axis.set_ylabel(label)
-        fig.suptitle('Static vs dynamic: trial means; error bars = sample standard deviation')
+        fig.suptitle('Static vs dynamic: trial means; error bars = sample standard deviation'
+                     if any(row['trials']>1 for row in summaries) else
+                     'Static vs dynamic: ONE round per mode; variability not measured')
         fig.tight_layout(); fig.savefig(output/'comparison.png'); plt.close(fig)
         fig,axis=plt.subplots()
         servers=['srv1','srv2','srv3','srv4']
@@ -71,4 +84,7 @@ def plot(root):
     print(f'Graphs from measured CSV data: {output}')
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(); p.add_argument('results'); plot(p.parse_args().results)
+    p=argparse.ArgumentParser(); p.add_argument('results'); args=p.parse_args()
+    plot(args.results)
+    for case in sorted((Path(args.results)/'comparison_cases').glob('*')):
+        if (case/'requests.csv').exists(): plot(case)

@@ -2,7 +2,7 @@
 set -euo pipefail
 cd -- "$(dirname -- "$0")"
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-    printf '%s\n' 'Usage: ./demo.sh [--scenario all|normal|congestion|server-failure|link-failure|comparison|cli] [--trials N]' 'Default: full demonstration plus 3 paired static/dynamic trials. Run as your normal user.'
+    printf '%s\n' 'Usage: ./demo.sh [--scenario all|normal|congestion|server-failure|link-failure|comparison|cli] [--trials N] [--present]' 'Default: all cases, one static + one dynamic batch each. Run as your normal user.'
     exit 0
 fi
 mkdir -p "$PWD/results"
@@ -19,6 +19,7 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 # Obtain permission before starting the experiment; sudo is limited to Mininet.
 sudo -v
+demo_started=$SECONDS
 python3 -B generate_content.py
 ./sdn-env/bin/python -B sdn_launcher.py --results "$output" > "$output/controller.log" 2>&1 &
 controller_pid=$!
@@ -28,4 +29,5 @@ status=0
 sudo /usr/bin/python3 -B experiment.py --results "$output" "$@" || status=$?
 python3 -B plot_results.py "$output" || status=1
 printf 'Results: %s\n' "$output"
+printf 'Elapsed demo time: %s seconds (including presentation pauses)\n' "$((SECONDS-demo_started))"
 exit "$status"
